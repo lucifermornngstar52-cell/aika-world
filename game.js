@@ -181,7 +181,7 @@ function genWorld(s) {
   totalWood = 0; pendingBuild = null; settlersSpawned = 0;
   simTime = 0; selected = null; selectedObj = null; selectedEnt = null; lastPhase = 0;
   weather = { rain: false, t: 60 + rng() * 120, bolt: 0 };
-  SIM.monsterWaves = 0; SIM.monsterKills = 0; SIM.deaths = 0; SIM.births = 0; SIM.harvests = 0; SIM.rains = 0;
+  SIM.monsterWaves = 0; SIM.monsterKills = 0; SIM.melted = 0; SIM.deaths = 0; SIM.births = 0; SIM.harvests = 0; SIM.rains = 0;
   renderMapCanvas();
   logEvent('🔥', 'Двое древних людей разожгли костёр. Начало великого пути!');
 }
@@ -788,7 +788,7 @@ function decide(v) {
     if (partner) { startSocial(v, partner); return; }
   }
   // ферма созрела — урожай важнее всего из работы
-  const readyFarm = farms.find(f => f.stage >= 3);
+  const readyFarm = stocks.berries < 100 ? farms.find(f => f.stage >= 3) : null;
   if (readyFarm && !night) { startHarvest(v, readyFarm); return; }
   // еда кончается — фуражируем / охотимся
   if (stocks.berries < 8 && !night) {
@@ -819,8 +819,9 @@ function decide(v) {
     const st = findNearestObj(v, ['stone']);
     if (st) { startMine(v, st); return; }
   }
-  const t = findNearestObj(v, ['tree', 'pine']);
+  const t = stocks.wood < 400 ? findNearestObj(v, ['tree', 'pine']) : null;
   if (t && !night) { startChop(v, t); return; }
+  if (!t && !night && stocks.wood >= 400 && rng() < 0.2) think(v, 'Дров на складе выше крыши — можно и отдохнуть.');
   if (night && hasTrait(v, 'dreamer') && rng() < 0.5) { think(v, pick(THOUGHTS.nightDream)); startWander(v); return; }
   startWander(v);
 }
@@ -1205,7 +1206,6 @@ function updateMonster(m, dt) {
   // цель: ближайший житель (кроме спрятавшихся)
   let target = null, bd = 9 * 9;
   for (const v of villagers) {
-    if (v.state === 'hide' || v.state === 'sleep' && isNight() && false) continue;
     if (v.state === 'hide') continue;
     const d = dist2(v.x, v.y, m.x, m.y);
     if (d < bd) { bd = d; target = v; }
@@ -1243,7 +1243,8 @@ function updateMonster(m, dt) {
 function killMonster(m, how) {
   const i = monsters.indexOf(m);
   if (i >= 0) monsters.splice(i, 1);
-  SIM.monsterKills++;
+  if (how === 'растаял на солнце') SIM.melted = (SIM.melted || 0) + 1;
+  else SIM.monsterKills++;
   if (how === 'растаял на солнце') {
     if (rng() < 0.3) logEvent('☀️', 'Слайма растаяла под лучами солнца.');
   } else {
@@ -1290,7 +1291,7 @@ function updateVillager(v, dt) {
       decide(v);
       return;
     }
-    if (phase() < 0.15 || phase() > 0.9 || n.hunger < 15) {
+    if ((phase() < 0.5 && !isNight()) || n.hunger < 15) {
       v.state = 'idle'; v.decideT = 0.5;
       think(v, 'Доброе утро!');
     }
@@ -1561,6 +1562,24 @@ function updateVillager(v, dt) {
     }
     case 'goto_build': {
       if (!pendingBuild || pendingBuild.assigned !== v) { v.state = 'idle'; v.decideT = 0.5; break; }
+      const bd = dist(v.x, v.y, pendingBuild.x + 0.5, pendingBuild.y + 0.5);
+      if (bd > 2.4) {
+        if (!v.path) {
+          const t = approachTile(v, pendingBuild.x, pendingBuild.y);
+          v.path = t ? astar(v.x, v.y, t.x, t.y) : null;
+          v.pathIdx = 0;
+          if (!v.path) {
+            // место недостижимо — отмена стройки с возвратом материалов
+            const COSTS = { shelter: { wood: 10 }, farm: { wood: 15 }, hut: { wood: 25 }, house: { wood: 50, stone: 10 } };
+            const c = COSTS[pendingBuild.kind] || {};
+            stocks.wood += c.wood || 0; stocks.stone += c.stone || 0;
+            logEvent('🚧', 'Стройку отменили: место недостижимо. Материалы вернули на склад.');
+            pendingBuild = null;
+          }
+        }
+        v.state = 'goto_build';
+        break;
+      }
       v.state = 'build';
       v.workT = { shelter: 4, farm: 5, hut: 6, house: 8 }[pendingBuild.kind] || 6;
       break;
@@ -1906,11 +1925,16 @@ function objInfo(o) {
   }
   if (o.type === 'grave') lines.push('Деревня помнит своих героев…');
   if (o.type === 'campfire') {
-    lines.push(`Эпоха: <b>${ERAS[era()]}</b>`, `Жителей: <b>${villagers.length}</b> · Койки: <b>${beds()}</b>`, `Склад: <b>${stocks.wood} 🪵 · ${stocks.stone} 🪨 · ${stocks.berries} 🫐</b>`, `Зданий: 🏕${cnt('shelter')} 🏠${cnt('hut')} 🏡${cnt('house')} 🌾${farms.length}`, `Сражено слайм: <b>${SIM.monsterKills}</b> · Потери: <b>${SIM.deaths}</b> · Рождения: <b>${SIM.births}</b>`);
+    lines.push(`Эпоха: <b>${ERAS[era()]}</b>`, `Жителей: <b>${villagers.length}</b> · Койки: <b>${beds()}</b>`, `Склад: <b>${stocks.wood} 🪵 · ${stocks.stone} 🪨 · ${stocks.berries} 🫐</b>`, `Зданий: 🏕${cnt('shelter')} 🏠${cnt('hut')} 🏡${cnt('house')} 🌾${farms.length}`, `Сражено слайм: <b>${SIM.monsterKills}</b> · Растаяло на солнце: <b>${SIM.melted || 0}</b> · Потери: <b>${SIM.deaths}</b> · Рождения: <b>${SIM.births}</b>`);
   }
   return { icon: t[0], title: t[1], lines };
 }
 function updatePanel() {
+  if (selectedObj && !objects.includes(selectedObj)) selectedObj = null;
+  if (selectedEnt) {
+    const arr = selectedEnt.list === 'animals' ? animals : monsters;
+    if (!arr.find(x => x.id === selectedEnt.id)) selectedEnt = null;
+  }
   if (!selected && !selectedObj && !selectedEnt) { panelEl.style.display = 'none'; return; }
   panelEl.style.display = 'block';
   if (!selected) {
