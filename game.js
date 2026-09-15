@@ -21,10 +21,10 @@ let monsters = [];  // слаймы (враги, приходят ночью)
 let campfire = { x: 0, y: 0 };
 let huts = [];
 let farms = [];     // объекты типа 'farm' тоже лежат в objects
-let stocks = { wood: 0, berries: 6 };
+let stocks = { wood: 0, berries: 6, stone: 0 };
 let totalWood = 0;
 let pendingBuild = null;   // { kind:'hut'|'farm', x, y, assigned }
-let settlersThresholds = [45, 110, 200, 320, 470];
+let settlersThresholds = [30, 70, 130, 220, 340];
 let settlersSpawned = 0;
 let simTime = 0;
 let simSpeed = 1, paused = false;
@@ -79,7 +79,7 @@ const TILE_COLORS = {
   3: [94, 140, 66], 4: [110, 156, 74], 5: [120, 120, 128], 6: [225, 228, 235]
 };
 const isWalkTile = t => t >= 2 && t <= 4;
-const BLOCKING = new Set(['tree', 'pine', 'bush', 'stone', 'hut', 'campfire', 'farm']);
+const BLOCKING = new Set(['tree', 'pine', 'bush', 'stone', 'hut', 'campfire', 'farm', 'shelter', 'house']);
 
 function blockingAt(x, y) {
   const o = objAt.get(key(x, y));
@@ -155,19 +155,14 @@ function genWorld(s) {
     }
   addObject('campfire', campfire.x, campfire.y);
   huts = [];
-  addHut(best.x - 3, best.y - 1);
-  addHut(best.x + 3, best.y + 1);
   farms = [];
 
+  // двое древних людей — начало великого пути
   villagers = [];
-  const spawn = [
-    [best.x - 2, best.y + 2], [best.x + 2, best.y - 2],
-    [best.x - 4, best.y], [best.x + 4, best.y],
-    [best.x + 1, best.y + 3], [best.x - 1, best.y - 3]
-  ];
-  for (let i = 0; i < 6; i++) {
+  const spawn = [[best.x - 2, best.y + 2], [best.x + 2, best.y - 2]];
+  for (let i = 0; i < 2; i++) {
     const p = spawn[i];
-    if (!walkable(p[0], p[1])) { p[0] = best.x; p[1] = best.y + i; }
+    if (!walkable(p[0], p[1])) { p[0] = best.x; p[1] = best.y + 1 + i; }
     villagers.push(makeVillager(p[0] + 0.5, p[1] + 0.5));
   }
 
@@ -182,13 +177,13 @@ function genWorld(s) {
     animals.push({ id: nextId++, kind: 'wolf', x: p.x, y: p.y, hp: 12, state: 'idle', t: rng() * 3, dirX: 0, dirY: 0, facing: 1, animT: 0, preyId: 0 });
   }
   monsters = [];
-  stocks = { wood: 0, berries: 6 };
+  stocks = { wood: 0, berries: 6, stone: 0 };
   totalWood = 0; pendingBuild = null; settlersSpawned = 0;
-  simTime = 0; selected = null; lastPhase = 0;
+  simTime = 0; selected = null; selectedObj = null; selectedEnt = null; lastPhase = 0;
   weather = { rain: false, t: 60 + rng() * 120, bolt: 0 };
   SIM.monsterWaves = 0; SIM.monsterKills = 0; SIM.deaths = 0; SIM.births = 0; SIM.harvests = 0; SIM.rains = 0;
   renderMapCanvas();
-  logEvent('🔥', 'Деревня основана! Костёр горит, жители готовы к труду.');
+  logEvent('🔥', 'Двое древних людей разожгли костёр. Начало великого пути!');
 }
 
 function addObject(type, x, y) {
@@ -211,6 +206,17 @@ function addHut(x, y) {
   huts.push({ x, y });
   return true;
 }
+const ERAS = [null, 'Древний лагерь', 'Стоянка', 'Деревня', 'Поселение'];
+function cnt(type) { let n = 0; for (const o of objects) if (o.type === type) n++; return n; }
+function beds() { return cnt('shelter') * 2 + cnt('hut') * 2 + cnt('house') * 3; }
+function homes() { return objects.filter(o => o.type === 'shelter' || o.type === 'hut' || o.type === 'house'); }
+function era() {
+  if (cnt('house') >= 2) return 4;
+  if (cnt('hut') >= 2) return 3;
+  if (cnt('shelter') >= 1) return 2;
+  return 1;
+}
+let lastEra = 1;
 
 // ── Текстуры ─────────────────────────────────────────────────────
 const tileTex = {};
@@ -344,24 +350,94 @@ function makeTextures() {
     px(g, 2, 1, 120, 90, 58);
     return c;
   })();
-  // хижина
+  // хижина v2 — аккуратный сруб с дверью, окном и трубой
   spr.hut = (() => {
-    const c = document.createElement('canvas'); c.width = 16; c.height = 14;
+    const c = document.createElement('canvas'); c.width = 18; c.height = 16;
     const g = c.getContext('2d');
-    for (let y = 7; y < 13; y++) for (let x = 2; x < 14; x++) {
-      const col = (x + y) % 2 ? [150, 110, 70] : [135, 98, 62];
-      px(g, x, y, col[0], col[1], col[2]);
+    // стены: горизонтальные брёвна
+    for (let y = 8; y < 15; y++) {
+      for (let x = 1; x < 17; x++) {
+        const log = y % 2 === 0;
+        const col = log ? [148, 106, 66] : [128, 92, 58];
+        px(g, x, y, col[0], col[1], col[2]);
+        if (x % 4 === 0 && log) px(g, x, y, 108, 76, 48); // стыки брёвен
+      }
     }
-    for (let row = 0; row < 7; row++) {
-      for (let x = 1 + row; x < 15 - row; x++) {
-        const col = row % 2 ? [96, 62, 44] : [118, 78, 52];
+    // тёмная обвязка
+    for (let x = 1; x < 17; x++) { px(g, x, 8, 96, 68, 44); px(g, x, 14, 90, 64, 42); }
+    // дверь по центру
+    for (let y = 10; y < 15; y++) for (let x = 8; x < 11; x++) px(g, x, y, 66, 46, 30);
+    px(g, 7, 10, 84, 60, 40); px(g, 11, 10, 84, 60, 40);
+    px(g, 10, 12, 210, 180, 120); // ручка
+    // окно слева
+    for (let y = 10; y < 12; y++) for (let x = 4; x < 7; x++) px(g, x, y, 40, 30, 24);
+    px(g, 3, 10, 84, 60, 40); px(g, 7, 10, 84, 60, 40);
+    // крыша: двухскатная с коньком и свесами
+    for (let row = 0; row < 8; row++) {
+      for (let x = row; x < 18 - row; x++) {
+        const col = row === 7 ? [70, 46, 32] : (row % 2 ? [96, 62, 44] : [112, 74, 50]);
         px(g, x, row, col[0], col[1], col[2]);
       }
     }
-    px(g, 4, 9, 40, 30, 24); px(g, 5, 9, 40, 30, 24);
-    px(g, 4, 10, 40, 30, 24); px(g, 5, 10, 40, 30, 24);
-    for (let y = 9; y < 13; y++) px(g, 11, y, 62, 44, 30);
-    spr.hutWindow = { x: 4, y: 9, w: 2, h: 2 };
+    for (let x = 7; x < 11; x++) px(g, x, 0, 132, 92, 64); // конёк
+    // труба
+    for (let y = 0; y < 3; y++) for (let x = 13; x < 15; x++) px(g, x, y, 130, 130, 138);
+    spr.hutWindow = { x: 4, y: 10, w: 3, h: 2 };
+    spr.hutChimney = { x: 13, y: 0 };
+    return c;
+  })();
+  // шалаш — вигвам из жердей
+  spr.shelter = (() => {
+    const c = document.createElement('canvas'); c.width = 14; c.height = 14;
+    const g = c.getContext('2d');
+    for (let i = 0; i < 12; i++) {
+      const spread = Math.round(i * 0.5);
+      px(g, 6 - spread, 1 + i, 118, 86, 54);
+      px(g, 6 + spread + 1, 1 + i, 102, 74, 46);
+    }
+    // вход
+    for (let y = 8; y < 13; y++) for (let x = 5; x < 9; x++) px(g, x, y, 34, 26, 20);
+    // связка сверху
+    px(g, 6, 0, 140, 104, 64); px(g, 7, 0, 140, 104, 64);
+    return c;
+  })();
+  // дом — каменный фундамент, трубы, два окна
+  spr.house = (() => {
+    const c = document.createElement('canvas'); c.width = 22; c.height = 18;
+    const g = c.getContext('2d');
+    // каменный фундамент
+    for (let y = 15; y < 18; y++) for (let x = 1; x < 21; x++) {
+      const col = (x + y) % 3 ? [128, 126, 132] : [106, 104, 112];
+      px(g, x, y, col[0], col[1], col[2]);
+    }
+    // стены светлые
+    for (let y = 7; y < 15; y++) for (let x = 2; x < 20; x++) {
+      const col = (x + y) % 2 ? [170, 136, 92] : [156, 124, 84];
+      px(g, x, y, col[0], col[1], col[2]);
+    }
+    // дверь
+    for (let y = 10; y < 15; y++) for (let x = 10; x < 13; x++) px(g, x, y, 70, 48, 32);
+    px(g, 12, 12, 214, 184, 124);
+    // окна
+    for (const wx of [4, 16]) {
+      for (let y = 10; y < 12; y++) for (let x = wx; x < wx + 3; x++) px(g, x, y, 44, 34, 28);
+      px(g, wx + 1, 10, 120, 130, 140); px(g, wx + 1, 11, 120, 130, 140);
+      px(g, wx - 1, 10, 96, 68, 44); px(g, wx + 3, 10, 96, 68, 44);
+    }
+    // крыша тёмная с чередованием
+    for (let row = 0; row < 7; row++) {
+      for (let x = row; x < 22 - row; x++) {
+        const col = row === 6 ? [80, 52, 40] : (x + row) % 2 ? [140, 74, 54] : [122, 62, 46];
+        px(g, x, row, col[0], col[1], col[2]);
+      }
+    }
+    // труба кирпичная
+    for (let y = 0; y < 5; y++) for (let x = 15; x < 18; x++) {
+      const col = y % 2 ? [150, 84, 62] : [134, 72, 54];
+      px(g, x, y, col[0], col[1], col[2]);
+    }
+    spr.houseWindows = [{ x: 4, y: 10, w: 3, h: 2 }, { x: 16, y: 10, w: 3, h: 2 }];
+    spr.houseChimney = { x: 16, y: 0 };
     return c;
   })();
   // костёр
@@ -540,7 +616,8 @@ const THOUGHTS = {
   deposit: ['Вклад в общее дело!', 'Дрова в общую кучу — так честно.'],
   wander: ['Пойду посмотрю, что там.', 'Интересно, что за холмом?', 'Прогулка ещё никому не мешала.', 'Мир большой, надо всё обойти.'],
   idle: ['Сегодня хороший день.', 'Чем бы заняться?', 'Птички поют… красота.'],
-  craft: ['Нужен топор — сделаю топор.', 'Хороший инструмент — половина дела.', 'Кузнечное дело по плечу каждому… наверное.'],
+  craft: ['Нужен топор — сделаю топор.', 'Хороший инструмент — половина дела.', 'Из камня и палки выйдет орудие!'],
+  mine: ['Камень — основа всех орудий.', 'Тяжёлый, но очень нужный.', 'Осторожно, пальцы!'],
   fight: ['За деревню!', 'А ну, тварь, отступай!', 'Не сегодня, слайма!', 'Костром клянусь, ты не пройдёшь!'],
   flee: ['Спасайся кто может!', 'Отступаем!', 'Надо в укрытие!'],
   hunt: ['Тише… кролик близко.', 'Ужин сам бежит в руки.'],
@@ -562,10 +639,10 @@ function makeVillager(x, y) {
     id: nextId++, name, bodyIdx, traits,
     x, y, path: null, pathIdx: 0, facing: 1,
     state: 'idle', stateT: 0, workT: 0, targetObj: null, targetVil: null,
-    carry: { wood: 0, berries: 0 },
+    carry: { wood: 0, berries: 0, stone: 0 },
     needs: { hunger: 70 + rng() * 30, energy: 70 + rng() * 30, social: 50 + rng() * 40 },
     skill: { chop: 1, forage: 1, combat: 1 },
-    hp: 20, tool: null,
+    hp: 20, tool: null, spear: false,
     isChild: false, growAt: 0,
     thought: '', thoughtUntil: 0, thoughts: [],
     home: null, decideT: rng() * 2,
@@ -696,7 +773,7 @@ function decide(v) {
   // 1. угроза — выжить важнее всего
   const threat = nearestMonster(v, v.isChild ? 7 : 5);
   if (threat) {
-    const braveEnough = !v.isChild && (hasTrait(v, 'brave') ? v.hp > 8 : v.hp > 12 || v.tool === 'spear');
+    const braveEnough = !v.isChild && (hasTrait(v, 'brave') ? v.hp > 8 : v.hp > 12 || v.spear);
     if (braveEnough) startFight(v, threat);
     else startFlee(v);
     return;
@@ -705,7 +782,7 @@ function decide(v) {
   if (pendingBuild && !pendingBuild.assigned && !night) { startBuild(v); return; }
   if (n.hunger < 32) { startEat(v); return; }
   if (n.energy < 22 || (night && n.energy < 70)) { startSleep(v); return; }
-  if (v.carry.wood + v.carry.berries >= 6) { startDeposit(v); return; }
+  if (v.carry.wood + v.carry.berries + v.carry.stone >= 6) { startDeposit(v); return; }
   if (n.social < 30 && !night) {
     const partner = villagers.find(o => o !== v && o !== v.targetVil && !['sleep', 'social', 'flee', 'hide'].includes(o.state) && o.needs.social < 60);
     if (partner) { startSocial(v, partner); return; }
@@ -720,8 +797,28 @@ function decide(v) {
     const rb = nearestAnimal(v, 'rabbit', 9);
     if (rb) { startHunt(v, rb); return; }
   }
-  // перед рубкой — скрафти топор
-  if (!v.tool && stocks.wood >= 8 && !night) { startCraft(v, 'axe'); return; }
+  // орудия труда: каменный топор = палка + камень.
+  // Порядок: дрова → камень → крафт. Карьер — только когда дерево уже есть.
+  if (!v.tool && !night) {
+    const woodNow = stocks.wood + v.carry.wood;
+    const stoneNow = stocks.stone + v.carry.stone;
+    if (woodNow >= 3 && stoneNow >= 2) { startCraft(v, 'axe'); return; }
+    if (woodNow >= 3 && stoneNow < 2) {
+      const st = findNearestObj(v, ['stone']);
+      if (st) { startMine(v, st); return; }
+      // камня нет вовсе — рубим без инструмента
+    }
+  }
+  // перед ночной войной — копьё
+  if (night && monsters.length > 0 && !v.spear && stocks.wood >= 4 && stocks.stone >= 3) {
+    startCraft(v, 'spear');
+    return;
+  }
+  // камень нужен для эпохи каменных домов
+  if (era() >= 3 && stocks.stone + v.carry.stone < 24 && !night) {
+    const st = findNearestObj(v, ['stone']);
+    if (st) { startMine(v, st); return; }
+  }
   const t = findNearestObj(v, ['tree', 'pine']);
   if (t && !night) { startChop(v, t); return; }
   if (night && hasTrait(v, 'dreamer') && rng() < 0.5) { think(v, pick(THOUGHTS.nightDream)); startWander(v); return; }
@@ -754,8 +851,13 @@ function startHarvest(v, o) {
   think(v, pick(THOUGHTS.harvest));
 }
 function startHunt(v, a) {
-  v.state = 'hunt'; v.huntId = a.id;
+  v.state = 'hunt'; v.huntId = a.id; v.workT = 12;
   think(v, pick(THOUGHTS.hunt));
+}
+function startMine(v, o) {
+  if (!gotoObj(v, o)) { startWander(v); return; }
+  v.state = 'goto_mine'; v.targetObj = o;
+  think(v, pick(THOUGHTS.mine));
 }
 function startCraft(v, kind) {
   const t = approachTile(v, campfire.x, campfire.y) || { x: campfire.x, y: campfire.y + 1 };
@@ -786,7 +888,7 @@ function startEat(v) {
   }
 }
 function startSleep(v) {
-  const home = huts.length ? huts[v.id % huts.length] : campfire;
+  const hm = homes(); const home = hm.length ? hm[v.id % hm.length] : campfire;
   const t = approachTile(v, home.x, home.y) || { x: home.x, y: home.y + 1 };
   v.path = astar(v.x, v.y, t.x, t.y); v.pathIdx = 0;
   v.state = 'goto_sleep';
@@ -821,7 +923,7 @@ function startFight(v, m) {
   think(v, pick(THOUGHTS.fight));
 }
 function startFlee(v) {
-  const home = huts.length ? huts[v.id % huts.length] : campfire;
+  const hm = homes(); const home = hm.length ? hm[v.id % hm.length] : campfire;
   const t = approachTile(v, home.x, home.y) || { x: home.x, y: home.y + 1 };
   v.path = astar(v.x, v.y, t.x, t.y); v.pathIdx = 0;
   v.state = 'flee';
@@ -868,15 +970,11 @@ function updateSim(dt) {
     arriveSettler();
   }
 
-  // план стройки
-  if (!pendingBuild && !isNight()) {
-    const wantFarm = stocks.berries < 25 && farms.length < 4 && stocks.wood >= 15;
-    const wantHut = stocks.wood >= 25 && huts.length < 9;
-    if (wantFarm || wantHut) {
-      const kind = wantFarm ? 'farm' : 'hut';
-      const spot = findBuildSpot(kind);
-      if (spot) pendingBuild = { kind, x: spot.x, y: spot.y, assigned: null };
-    }
+  tryPlanBuild();
+  const er = era();
+  if (er !== lastEra) {
+    lastEra = er;
+    logEvent('🏆', `Деревня перешла в новую эпоху: «${ERAS[er]}»!`);
   }
 
   // жители
@@ -904,12 +1002,17 @@ function updateSim(dt) {
 
 function onNightfall() {
   const day = Math.floor(simTime / DAY_LEN) + 1;
-  const count = Math.min(4, Math.ceil(villagers.length / 4) + (day > 6 ? 1 : 0));
+  if (day < 3) {
+    logEvent('🌙', 'Ночь спокойная… пока.');
+    for (const v of villagers) if (hasTrait(v, 'dreamer')) think(v, pick(THOUGHTS.nightDream));
+    return;
+  }
+  const count = Math.min(3, Math.ceil(villagers.length / 4) + (day > 6 ? 1 : 0));
   for (let i = 0; i < count; i++) {
     const p = randWalkable(22);
     monsters.push({
       id: nextId++, kind: 'slime', x: p.x, y: p.y,
-      hp: 10 + day, maxHp: 10 + day, dmg: 2 + Math.min(3, Math.floor(day / 4)),
+      hp: 10 + Math.min(8, day), maxHp: 10 + Math.min(8, day), dmg: 2 + Math.min(3, Math.floor(day / 4)),
       state: 'wander', t: 0, targetId: 0, atkT: 0, facing: 1, animT: 0
     });
   }
@@ -937,7 +1040,7 @@ function onMorning() {
   }
   // рождение: еда есть, дома есть, любовь есть
   const adults = villagers.filter(v => !v.isChild);
-  if (adults.length >= 2 && stocks.berries >= 15 && huts.length >= 4 && rng() < 0.5 && villagers.length < 16) {
+  if (adults.length >= 2 && stocks.berries >= 15 && beds() >= 4 && era() >= 2 && rng() < 0.5 && villagers.length < 16) {
     const a = adults[Math.floor(rng() * adults.length)];
     let b = adults[Math.floor(rng() * adults.length)];
     if (b === a) b = adults[(adults.indexOf(a) + 1) % adults.length];
@@ -949,7 +1052,14 @@ function onMorning() {
     logEvent('👶', `У ${a.name} и ${b.name} родился ребёнок! Деревня растёт.`);
   }
   // подселение после потерь
-  if (villagers.length < huts.length && rng() < 0.35) arriveSettler();
+  if (villagers.length === 0) { arriveSettler(); if (villagers.length === 0) arriveSettler(); }
+  else if (villagers.length * 2 < beds() + 2 && rng() < 0.3) arriveSettler();
+  let stonesTo = 6 - cnt('stone');
+  while (stonesTo > 0 && rng() < 0.65) {
+    const p = randWalkable(9);
+    addObject('stone', Math.floor(p.x), Math.floor(p.y));
+    stonesTo--;
+  }
 }
 
 function arriveSettler() {
@@ -969,6 +1079,29 @@ function arriveSettler() {
     for (const v of villagers)
       if (v !== nv && hasTrait(v, 'curious')) think(v, pick(THOUGHTS.greet));
   }
+}
+
+function tryPlanBuild() {
+  if (pendingBuild || isNight()) return;
+  const e = era();
+  const bedsNow = beds();
+  const pop = villagers.length;
+  let plan = null;
+  if (bedsNow < pop + 1) {
+    if (e >= 3 && stocks.wood >= 50 && stocks.stone >= 10 && cnt('house') < 5) plan = { kind: 'house', wood: 50, stone: 10 };
+    else if (e >= 2 && stocks.wood >= 25 && cnt('hut') < 8) plan = { kind: 'hut', wood: 25 };
+    else if (stocks.wood >= 10 && cnt('shelter') < 6) plan = { kind: 'shelter', wood: 10 };
+  } else if (e >= 3 && stocks.berries < 25 && farms.length < 4 && stocks.wood >= 15) {
+    plan = { kind: 'farm', wood: 15 };
+  }
+  if (!plan) return;
+  const spot = findBuildSpot(plan.kind);
+  if (!spot) return;
+  stocks.wood -= plan.wood;
+  if (plan.stone) stocks.stone -= plan.stone;
+  pendingBuild = { kind: plan.kind, x: spot.x, y: spot.y, assigned: null };
+  const names = { shelter: 'шалаш 🏕', hut: 'хижину 🏠', house: 'настоящий дом 🏡', farm: 'поле 🌾' };
+  logEvent('📐', `Деревня планирует строить: ${names[plan.kind]}. Материалы выделены.`);
 }
 
 function findBuildSpot(kind) {
@@ -1085,6 +1218,13 @@ function updateMonster(m, dt) {
         m.atkT = 1.2;
         target.hp -= m.dmg;
         if (rng() < 0.3) think(target, 'Ай! Эта тварь кусается!');
+        // шум боя будит спящих рядом — деревня обороняется толпой
+        for (const w of villagers) {
+          if (w.state === 'sleep' && dist(w.x, w.y, target.x, target.y) < 7) {
+            w.path = null;
+            decide(w);
+          }
+        }
         if (target.hp <= 0) killVillager(target, m);
       }
     }
@@ -1249,6 +1389,9 @@ function updateVillager(v, dt) {
       break;
     }
     case 'goto_craft': {
+      // сдаём ношу в общий котёл — из неё и мастерим
+      stocks.wood += v.carry.wood; stocks.stone += v.carry.stone; stocks.berries += v.carry.berries;
+      v.carry = { wood: 0, berries: 0, stone: 0 };
       v.state = 'craft'; v.workT = 2.5;
       break;
     }
@@ -1256,18 +1399,25 @@ function updateVillager(v, dt) {
       v.workT -= dt;
       if (v.workT <= 0) {
         const kind = v.craftKind;
-        if (stocks.wood >= 8) {
-          stocks.wood -= 8;
-          v.tool = kind === 'axe' ? 'axe' : 'spear';
-          logEvent('🔨', `${v.name} смастерил ${kind === 'axe' ? 'топор 🪓' : 'копьё 🔱'} (−8 🪵)`);
+        const cost = kind === 'axe' ? { wood: 3, stone: 2 } : { wood: 3, stone: 2 };
+        if (stocks.wood >= cost.wood && stocks.stone >= cost.stone) {
+          stocks.wood -= cost.wood; stocks.stone -= cost.stone;
+          if (kind === 'axe') v.tool = 'axe'; else v.spear = true;
+          logEvent('🔨', `${v.name} смастерил ${kind === 'axe' ? 'каменный топор 🪓' : 'каменное копьё 🔱'} (−${cost.wood} 🪵 −${cost.stone} 🪨)`);
         } else {
-          think(v, 'Дров на инструмент не хватило…');
+          think(v, 'Камня на орудие не хватило…');
         }
         v.state = 'idle'; v.decideT = 0.5;
       }
       break;
     }
     case 'hunt': {
+      v.workT -= dt;
+      if (v.workT <= 0) {
+        think(v, 'Уф… не догнать. Пусть живёт.');
+        v.state = 'idle'; v.decideT = 1; v.huntId = 0; v.eatIntent = false;
+        break;
+      }
       const a = animals.find(x => x.id === v.huntId && x.hp > 0);
       if (!a) { v.state = 'idle'; v.decideT = 0.5; v.huntId = 0; break; }
       const d = dist(v.x, v.y, a.x, a.y);
@@ -1314,7 +1464,7 @@ function updateVillager(v, dt) {
         v.atkT -= dt;
         if (v.atkT <= 0) {
           v.atkT = 0.8;
-          const dmg = (v.tool === 'spear' ? 7 : 4) * (0.5 + v.skill.combat * 0.5) + (hasTrait(v, 'brave') ? 1 : 0);
+          const dmg = (v.spear ? 7 : 4) * (0.5 + v.skill.combat * 0.5) + (hasTrait(v, 'brave') ? 1 : 0);
           m.hp -= dmg;
           v.skill.combat = Math.min(3, v.skill.combat + 0.08);
           if (m.hp <= 0) {
@@ -1336,11 +1486,30 @@ function updateVillager(v, dt) {
       if (v.stateT <= 0) { v.state = 'idle'; v.decideT = 0.4; }
       break;
     }
+    case 'goto_mine': {
+      const o = v.targetObj;
+      if (!o) { v.state = 'idle'; v.decideT = 0.3; break; }
+      v.state = 'mine'; v.workT = 4;
+      break;
+    }
+    case 'mine': {
+      v.workT -= dt;
+      if (v.workT <= 0) {
+        const o = v.targetObj;
+        if (o && objects.includes(o)) {
+          removeObject(o);
+          v.carry.stone += 2;
+          logEvent('🪨', `${v.name} добыл камень (+2 🪨)`);
+        }
+        v.targetObj = null; v.state = 'idle'; v.decideT = 0.4 + rng();
+      }
+      break;
+    }
     case 'goto_deposit': {
-      stocks.wood += v.carry.wood; stocks.berries += v.carry.berries;
-      if (v.carry.wood > 0 || v.carry.berries > 0)
-        logEvent('📦', `${v.name} сдал запасы: +${v.carry.wood} 🪵 +${v.carry.berries} 🫐`);
-      v.carry = { wood: 0, berries: 0 };
+      stocks.wood += v.carry.wood; stocks.berries += v.carry.berries; stocks.stone += v.carry.stone;
+      if (v.carry.wood > 0 || v.carry.berries > 0 || v.carry.stone > 0)
+        logEvent('📦', `${v.name} сдал запасы: +${v.carry.wood} 🪵 +${v.carry.berries} 🫐 +${v.carry.stone} 🪨`);
+      v.carry = { wood: 0, berries: 0, stone: 0 };
       v.state = 'idle'; v.decideT = 0.5 + rng();
       break;
     }
@@ -1392,7 +1561,8 @@ function updateVillager(v, dt) {
     }
     case 'goto_build': {
       if (!pendingBuild || pendingBuild.assigned !== v) { v.state = 'idle'; v.decideT = 0.5; break; }
-      v.state = 'build'; v.workT = 6;
+      v.state = 'build';
+      v.workT = { shelter: 4, farm: 5, hut: 6, house: 8 }[pendingBuild.kind] || 6;
       break;
     }
     case 'build': {
@@ -1400,15 +1570,18 @@ function updateVillager(v, dt) {
       if (v.workT <= 0) {
         if (pendingBuild && pendingBuild.assigned === v) {
           const { kind, x, y } = pendingBuild;
-          if (kind === 'farm' && stocks.wood >= 15) {
-            stocks.wood -= 15;
-            if (addObject('farm', x, y)) {
-              const f = farms[farms.length - 1];
-              f.growAt = simTime + 60 / rainMult();
-              logEvent('🌾', `${v.name} распахал поле. Будет хлеб!`);
-            }
-          } else if (stocks.wood >= 25) {
-            stocks.wood -= 25;
+          if (kind === 'farm') {
+            addObject('farm', x, y);
+            const f = farms[farms.length - 1];
+            f.growAt = simTime + 60 / rainMult();
+            logEvent('🌾', `${v.name} распахал поле. Будет хлеб!`);
+          } else if (kind === 'shelter') {
+            addObject('shelter', x, y);
+            logEvent('🏕', `${v.name} построил шалаш. У деревни есть первое жильё!`);
+          } else if (kind === 'house') {
+            addObject('house', x, y);
+            logEvent('🏡', `${v.name} построил настоящий дом из камня и дерева!`);
+          } else {
             if (addHut(x, y)) logEvent('🏠', `${v.name} построил хижину! Деревня растёт.`);
           }
           pendingBuild = null;
@@ -1568,10 +1741,25 @@ function drawObject(o) {
     case 'grave': ctx.drawImage(spr.grave, x + 1, y + 2); break;
     case 'farm': ctx.drawImage(spr.farm[o.stage] || spr.farm[1], x - 4, y - 1); break;
     case 'hut': {
-      ctx.drawImage(spr.hut, x - 4, y - 6);
+      ctx.drawImage(spr.hut, x - 5, y - 8);
       if (nightAmount() > 0.3) {
         ctx.fillStyle = 'rgba(255,220,120,0.9)';
-        ctx.fillRect(x - 4 + spr.hutWindow.x, y - 6 + spr.hutWindow.y, spr.hutWindow.w, spr.hutWindow.h);
+        ctx.fillRect(x - 5 + spr.hutWindow.x, y - 8 + spr.hutWindow.y, spr.hutWindow.w, spr.hutWindow.h);
+        drawSmoke(x - 5 + spr.hutChimney.x + 1, y - 8 + spr.hutChimney.y);
+      }
+      break;
+    }
+    case 'shelter': {
+      ctx.drawImage(spr.shelter, x - 3, y - 6);
+      break;
+    }
+    case 'house': {
+      ctx.drawImage(spr.house, x - 7, y - 10);
+      if (nightAmount() > 0.3) {
+        ctx.fillStyle = 'rgba(255,220,120,0.9)';
+        for (const wnd of spr.houseWindows)
+          ctx.fillRect(x - 7 + wnd.x, y - 10 + wnd.y, wnd.w, wnd.h);
+        drawSmoke(x - 7 + spr.houseChimney.x + 1, y - 10 + spr.houseChimney.y);
       }
       break;
     }
@@ -1588,6 +1776,16 @@ function drawObject(o) {
   }
 }
 
+function drawSmoke(sx, sy) {
+  const t = performance.now() / 400;
+  for (let i = 0; i < 3; i++) {
+    const p = (t + i * 1.4) % 4;
+    const a = 0.5 - p * 0.11;
+    if (a <= 0) continue;
+    ctx.fillStyle = `rgba(180,180,190,${a.toFixed(2)})`;
+    ctx.fillRect(sx + Math.sin(p * 2 + i) * 1.2, sy - p * 1.6, 1.5, 1.5);
+  }
+}
 function drawAnimal(a) {
   const x = a.x * TILE - 3, y = a.y * TILE - 3;
   const frame = Math.floor(a.animT * 6) % 2;
@@ -1679,10 +1877,71 @@ function roundRect(x, y, w, h, r) {
 
 // ── Панель жителя ────────────────────────────────────────────────
 const panelEl = document.getElementById('villagerPanel');
+function fmtLeft(sec) {
+  if (!isFinite(sec) || sec <= 0) return 'вот-вот';
+  if (sec < 60) return Math.ceil(sec) + ' с';
+  return Math.ceil(sec / 60) + ' мин';
+}
+function objInfo(o) {
+  const titles = { tree: ['🌳', 'Лиственное дерево'], pine: ['🌲', 'Сосна'], bush: ['🫐', 'Ягодный куст'], stone: ['🪨', 'Валун'], flower: ['🌸', 'Цветок'], stump: ['🪵', 'Пень'], grave: ['🪦', 'Могила жителя'], farm: ['🌾', 'Поле пшеницы'], shelter: ['🏕', 'Шалаш'], hut: ['🏠', 'Хижина'], house: ['🏡', 'Каменный дом'], campfire: ['🔥', 'Костёр — сердце деревни'] };
+  const t = titles[o.type] || ['❓', 'Объект'];
+  const lines = [];
+  if (o.type === 'tree' || o.type === 'pine') lines.push('Древесина: <b>3 🪵</b>', 'Срубит любой житель с топором');
+  if (o.type === 'bush') {
+    if (o.depleted) lines.push('Пусто. Ягоды вернутся через <b>' + fmtLeft(o.regrowAt - simTime) + '</b>');
+    else lines.push('Спелые ягоды: <b>2 🫐</b>');
+  }
+  if (o.type === 'stone') lines.push('Камень: <b>2 🪨</b>', 'Нужен для орудий и домов');
+  if (o.type === 'farm') {
+    const stageNames = ['—', 'ростки', 'колосится', 'созрело'];
+    lines.push('Стадия: <b>' + stageNames[o.stage] + '</b> (' + o.stage + '/3)');
+    lines.push(o.stage >= 3 ? 'Готово к уборке: <b>+4 🫐</b>' : 'До урожая: <b>' + fmtLeft((o.growAt - simTime) + (3 - o.stage) * 60) + '</b>');
+  }
+  if (o.type === 'shelter') lines.push('Первое жильё древних', 'Спальных мест: <b>2</b>');
+  if (o.type === 'hut') lines.push('Деревянный сруб с трубой', 'Спальных мест: <b>2</b>');
+  if (o.type === 'house') lines.push('Крепкий дом: камень + дерево', 'Спальных мест: <b>3</b>');
+  if (o.type === 'stump') {
+    const r = regrowQueue.find(q => q.x === o.x && q.y === o.y);
+    lines.push('Новое дерево через <b>' + (r ? fmtLeft(r.at - simTime) : '—') + '</b>');
+  }
+  if (o.type === 'grave') lines.push('Деревня помнит своих героев…');
+  if (o.type === 'campfire') {
+    lines.push(`Эпоха: <b>${ERAS[era()]}</b>`, `Жителей: <b>${villagers.length}</b> · Койки: <b>${beds()}</b>`, `Склад: <b>${stocks.wood} 🪵 · ${stocks.stone} 🪨 · ${stocks.berries} 🫐</b>`, `Зданий: 🏕${cnt('shelter')} 🏠${cnt('hut')} 🏡${cnt('house')} 🌾${farms.length}`, `Сражено слайм: <b>${SIM.monsterKills}</b> · Потери: <b>${SIM.deaths}</b> · Рождения: <b>${SIM.births}</b>`);
+  }
+  return { icon: t[0], title: t[1], lines };
+}
 function updatePanel() {
-  if (!selected) { panelEl.style.display = 'none'; return; }
-  const v = selected;
+  if (!selected && !selectedObj && !selectedEnt) { panelEl.style.display = 'none'; return; }
   panelEl.style.display = 'block';
+  if (!selected) {
+    let icon = '❓', title = '', lines = [];
+    if (selectedObj) {
+      const info = objInfo(selectedObj);
+      icon = info.icon; title = info.title; lines = info.lines;
+    } else if (selectedEnt) {
+      const arr = selectedEnt.list === 'animals' ? animals : monsters;
+      const ent = arr.find(x => x.id === selectedEnt.id);
+      if (!ent) { selectedEnt = null; panelEl.style.display = 'none'; return; }
+      if (ent.kind === 'rabbit') { icon = '🐇'; title = 'Кролик'; lines = ['Здоровье: <b>' + Math.ceil(ent.hp) + '</b>', 'Пугливый обитатель лугов', 'На него охотятся волки… и жители']; }
+      if (ent.kind === 'wolf') { icon = '🐺'; title = 'Волк'; lines = ['Здоровье: <b>' + Math.ceil(ent.hp) + '</b>', 'Охотится на кроликов', 'К деревне не подходит близко']; }
+      if (ent.kind === 'slime') { icon = '👾'; title = 'Слайма'; lines = ['Здоровье: <b>' + Math.ceil(ent.hp) + '</b>/' + ent.maxHp, 'Урон: <b>' + ent.dmg + '</b>', 'На рассвете тает на солнце ☀️']; }
+    }
+    panelEl.innerHTML = `
+      <div class="vp-head">
+        <div class="obj-icon">${icon}</div>
+        <div>
+          <div class="vp-name">${title}</div>
+          <div class="vp-traits">осмотр мира</div>
+        </div>
+        <button class="vp-close" id="vpClose">✕</button>
+      </div>
+      <div class="vp-thoughts" style="border-top:none;margin-top:4px">${lines.map(l => '<div class="thought" style="font-style:normal">' + l + '</div>').join('')}</div>
+    `;
+    const cl = document.getElementById('vpClose');
+    if (cl) cl.onclick = () => { selectedObj = null; selectedEnt = null; };
+    return;
+  }
+  const v = selected;
   const n = v.needs;
   const stateLabels = {
     idle: 'думает', wander: 'гуляет', chop: 'рубит дерево', forage: 'собирает ягоды',
@@ -1691,14 +1950,15 @@ function updatePanel() {
     harvest: 'собирает урожай',
     goto_chop: 'идёт к дереву', goto_forage: 'идёт к кустам', goto_deposit: 'несёт запасы',
     goto_eat: 'идёт поесть', goto_sleep: 'идёт спать', goto_social: 'идёт болтать',
-    goto_build: 'идёт на стройку', goto_craft: 'идёт к наковальне', goto_harvest: 'идёт на поле',
+    goto_build: 'идёт на стройку', goto_craft: 'мастерит у костра', goto_harvest: 'идёт на поле',
+    goto_mine: 'идёт за камнем', mine: 'добывает камень',
     goto_camp: 'приходит в деревню'
   };
   const act = stateLabels[v.state] || v.state;
   const carry = [];
   if (v.carry.wood) carry.push(`🪵 ${v.carry.wood}`);
   if (v.carry.berries) carry.push(`🫐 ${v.carry.berries}`);
-  const toolLabel = v.tool === 'axe' ? '🪓 топор' : v.tool === 'spear' ? '🔱 копьё' : '—';
+  const toolLabel = `${v.tool === 'axe' ? '🪓 топор' : ''}${v.spear ? (v.tool === 'axe' ? ' · ' : '') + '🔱 копьё' : ''}` || '—';
   const skills = `🪓${v.skill.chop.toFixed(1)} 🏹${v.skill.forage.toFixed(1)} ⚔️${v.skill.combat.toFixed(1)}`;
   const thoughtsHtml = v.thoughts.slice(0, 6).map(t => {
     const day = Math.floor(t.t / DAY_LEN) + 1;
@@ -1753,13 +2013,15 @@ function updateStats() {
   const phaseName = p < 0.1 ? '🌅 рассвет' : p < 0.3 ? '☀️ утро' : p < 0.55 ? '🌤 день' : p < 0.65 ? '🌇 вечер' : '🌙 ночь';
   const weatherIcon = weather.rain ? '🌧' : '';
   const danger = monsters.length ? ` <span class="danger">👾 ${monsters.length}!</span>` : '';
-  statsEl.innerHTML = `День <b>${day}</b> <span class="dim">${hh}:${mm} ${phaseName}${weatherIcon}</span>${danger}
-    &nbsp;·&nbsp; 👥 <b>${villagers.length}</b>
+  const eraName = ERAS[era()];
+  const bedsNow = beds();
+  statsEl.innerHTML = `День <b>${day}</b> <span class="dim">${hh}:${mm} ${weatherIcon || phaseName}</span>${danger}
+    <span class="era">${eraName}</span>
+    &nbsp;·&nbsp; 👥 <b>${villagers.length}</b>/<b>${bedsNow}</b>🛏
     &nbsp;·&nbsp; 🪵 <b>${stocks.wood}</b>
+    &nbsp;·&nbsp; 🪨 <b>${stocks.stone}</b>
     &nbsp;·&nbsp; 🫐 <b>${stocks.berries}</b>
-    &nbsp;·&nbsp; 🏠 <b>${huts.length}</b>
-    &nbsp;·&nbsp; 🐺 <b>${animals.filter(a => a.kind === 'wolf' && a.hp > 0).length}</b>
-    &nbsp;·&nbsp; <span class="dim">сид ${seed}</span>`;
+    &nbsp;·&nbsp; 🐺 <b>${animals.filter(a => a.kind === 'wolf' && a.hp > 0).length}</b>`;
 }
 
 // ── Ввод ─────────────────────────────────────────────────────────
@@ -1789,6 +2051,8 @@ canvas.addEventListener('pointermove', e => {
   }
   p.x = e.clientX; p.y = e.clientY;
 });
+let selectedObj = null;   // объект карты
+let selectedEnt = null;  // животное/монстр { list, id }
 function endPointer(e) {
   if (pointers.has(e.pointerId) && pointers.size === 1 && dragMoved < 8) {
     const wx = (e.clientX - cw / 2) / zoom + camX;
@@ -1798,8 +2062,26 @@ function endPointer(e) {
       const d = Math.hypot(v.x * TILE - wx, v.y * TILE - wy);
       if (d < bd) { bd = d; best = v; }
     }
-    selected = best;
-    updatePanel();
+    if (best) { selected = best; selectedObj = null; selectedEnt = null; updatePanel(); }
+    else {
+      // животные и монстры
+      let bd2 = 10, ent = null;
+      for (const a of animals) {
+        const d = Math.hypot(a.x * TILE - wx, a.y * TILE - wy);
+        if (a.hp > 0 && d < bd2) { bd2 = d; ent = { list: 'animals', id: a.id }; }
+      }
+      for (const m of monsters) {
+        const d = Math.hypot(m.x * TILE - wx, m.y * TILE - wy);
+        if (d < bd2) { bd2 = d; ent = { list: 'monsters', id: m.id }; }
+      }
+      if (ent) { selectedEnt = ent; selected = null; selectedObj = null; updatePanel(); }
+      else {
+        // объект на клетке
+        const o = objAt.get(key(Math.floor(wx / TILE), Math.floor(wy / TILE)));
+        if (o) { selectedObj = o; selected = null; selectedEnt = null; updatePanel(); }
+        else { selected = null; selectedObj = null; selectedEnt = null; updatePanel(); }
+      }
+    }
   }
   pointers.delete(e.pointerId);
 }
