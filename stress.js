@@ -33,3 +33,16 @@ for (const sd of [42, 777, 31337, 11111, 5555, 99, 2024, 8, 64, 100500]) {
     inv.join('; '));
 }
 console.log(bad === 0 ? '=== ВСЕ СИДЫ ЧИСТЫ' : '=== ПРОБЛЕМНЫХ СИДОВ: ' + bad);
+
+// детальный отчёт по сиду 100500: динамика населения
+T.genWorld(100500);
+let prevPop = T.villagers.length;
+for (let t = 0; t < T.DAY_LEN * 20; t += 0.25) {
+  T.updateSim(0.25);
+  if (T.villagers.length !== prevPop) {
+    console.log('  день', (t / T.DAY_LEN).toFixed(1), '→ pop', T.villagers.length,
+      '(deaths=' + T.SIM.deaths, 'births=' + T.SIM.births, 'kills=' + T.SIM.monsterKills + ')');
+    prevPop = T.villagers.length;
+  }
+}
+console.log('  итог:', 'pop=' + T.villagers.length, 'era=' + T.era(), 'beds=' + T.beds(), 'houses=' + T.cnt('house'), 'huts=' + T.cnt('hut'));
