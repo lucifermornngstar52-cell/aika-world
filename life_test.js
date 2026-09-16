@@ -3,8 +3,8 @@
 global.window = { innerWidth: 800, innerHeight: 600, devicePixelRatio: 1, addEventListener: ()=>{} };
 global.document = {
   createElement: () => ({ getContext: () => new Proxy({}, { get: () => () => {} }), width: 0, height: 0, style: {} }),
-  getElementById: () => ({ getContext: () => new Proxy({}, { get: () => () => {} }), style: {}, innerHTML: '', prepend: ()=>{}, children: { length: 0 }, onclick: null, addEventListener: ()=>{}, classList: { add: ()=>{}, remove: ()=>{} } }),
-  body: { classList: { add: ()=>{}, remove: ()=>{} } },
+  getElementById: () => ({ getContext: () => new Proxy({}, { get: () => () => {} }), style: {}, innerHTML: '', prepend: ()=>{}, children: { length: 0 }, onclick: null, addEventListener: ()=>{}, classList: { add: ()=>{}, remove: ()=>{}, toggle: ()=>{} } }),
+  body: { classList: { add: ()=>{}, remove: ()=>{}, toggle: ()=>{} } },
   addEventListener: () => {},
 };
 global.requestAnimationFrame = () => {};
