@@ -32,6 +32,9 @@ let mode = 'observer'; // 'observer' | 'life'
 let P = null;        // игрок в режиме «Жизнь»
 let worldId = null, worldName = '';
 let seed = (Date.now() % 2147483647) | 0;
+function urlSeed() {
+  try { const p = new URLSearchParams(location.search).get('seed'); return p ? (Math.abs(parseInt(p, 10)) || null) : null; } catch (e) { return null; }
+}
 let rng = null;
 let camX = 0, camY = 0, zoom = 1.6;
 let selected = null;
@@ -2831,7 +2834,7 @@ function showMainMenu() {
 }
 function startNewGame() {
   mode = 'observer'; P = null; hideLifeHud();
-  seed = Math.floor(Math.random() * 1000000000);
+  seed = urlSeed() || Math.floor(Math.random() * 1000000000);
   worldId = null; worldName = '';
   genWorld(seed);
   chronicleEl.innerHTML = '';
@@ -3025,7 +3028,7 @@ function lifeBubble(text) { P.bubble = { text, until: simTime + 4 }; }
 
 function startLifeGame(gender) {
   mode = 'life';
-  seed = Math.floor(Math.random() * 1000000000);
+  seed = urlSeed() || Math.floor(Math.random() * 1000000000);
   worldId = null; worldName = '';
   genWorld(seed);
   chronicleEl.innerHTML = '';
