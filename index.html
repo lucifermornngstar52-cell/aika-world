@@ -180,7 +180,7 @@
     <div id="worldsList"></div>
     <button id="btnNewLife" class="menu-primary" style="background:linear-gradient(135deg,#3fbf7f,#1f9d60);">🌱 НОВАЯ ЖИЗНЬ — сыграй за жителя</button>
     <button id="btnNewGame" class="menu-secondary">🔥 МИР-НАБЛЮДЕНИЕ</button>
-    <div class="menu-foot">v3.5 · режимы: наблюдатель и ЖИЗНЬ · миров до 12</div>
+    <div class="menu-foot">v3.6 · ЖИЗНЬ · стройка · живой мозг · миров до 12</div>
   </div>
 </div>
 
@@ -188,6 +188,15 @@
   <div class="intro-card">
     <div class="intro-title" style="font-size:20px">ПАУЗА</div>
     <button id="btnResume" class="menu-primary">▶ ПРОДОЛЖИТЬ</button>
+    <div style="margin-top:12px; text-align:left; font-size:12px; border-top:1px solid rgba(255,255,255,0.08); padding-top:10px;">
+      <b>🧠 Живой мозг жителей (Groq)</b>
+      <div style="color:#9aa4c0; margin:5px 0;">настоящие мысли и желания от ИИ — раз в ~12 сек</div>
+      <label style="display:flex; gap:7px; align-items:center; cursor:pointer;">
+        <input type="checkbox" id="llmOn" checked> включить живые мысли
+      </label>
+      <input id="llmKey" placeholder="ключ Groq (вшит свой — можно заменить)" style="width:100%; margin-top:7px; padding:8px; border-radius:9px; border:1px solid rgba(124,140,255,0.35); background:rgba(255,255,255,0.05); color:#e8eaf2; font-size:12px;">
+      <button id="btnLlmSave" class="menu-secondary" style="margin-top:7px;">💾 Сохранить настройки мозга</button>
+    </div>
     <button id="btnToMenu" class="menu-secondary">💾 Сохранить и выйти в меню</button>
   </div>
 </div>
@@ -252,6 +261,6 @@
   </div>
 </div>
 
-<script src="game.js?v=35"></script>
+<script src="game.js?v=36"></script>
 </body>
 </html>

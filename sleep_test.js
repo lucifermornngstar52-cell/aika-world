@@ -2,6 +2,7 @@ const fs = require('fs');
 global.window = { innerWidth: 800, innerHeight: 600, devicePixelRatio: 1, addEventListener: ()=>{} };
 const mkEl = () => ({ getContext: () => new Proxy({}, { get: () => () => {} }), style: {}, innerHTML: '', prepend: ()=>{}, children: { length: 0 }, onclick: null, addEventListener: ()=>{} });
 global.document = {
+  body: { classList: { add: ()=>{}, remove: ()=>{} } },
   createElement: () => mkEl(),
   getElementById: () => mkEl(),
   addEventListener: () => {},

@@ -10,7 +10,7 @@ global.document = {
 global.requestAnimationFrame = () => {};
 global.performance = { now: () => 0 };
 let src = require('fs').readFileSync('game.js', 'utf8').replace(/requestAnimationFrame\(loop\);/, '');
-src += ';globalThis.__T__ = { updateSim, DAY_LEN, get P(){return P}, startLifeGame, lifeGo, startLifeAction, finishLifeAction, craftItem, canCraft, lifeSleep, lifeEat, era, updatePlayer, get villagers(){return villagers}, get objects(){return objects}, get animals(){return animals}, get monsters(){return monsters}, objAt, key, get mode(){return mode}, restoreLifePlayer, resolveLifeParents, nextSave: () => {} };';
+src += ';globalThis.__T__ = { updateSim, DAY_LEN, get P(){return P}, startLifeGame, lifeGo, startLifeAction, finishLifeAction, craftItem, canCraft, lifeSleep, lifeEat, era, updatePlayer, get villagers(){return villagers}, get objects(){return objects}, get animals(){return animals}, get monsters(){return monsters}, objAt, key, get mode(){return mode}, restoreLifePlayer, resolveLifeParents, tryPlaceBuilding, TILE };';
 eval(src);
 const T = globalThis.__T__;
 let bad = 0;
@@ -79,5 +79,57 @@ try {
   if (T.P.inv.arrows !== 3) { bad++; console.log('FAIL: стрелы не загрузились'); }
   console.log('сейв/лоад игрока OK');
 } catch (e) { bad++; console.log('FAIL лоад: ' + e.stack.split('\n')[0]); }
+
+
+// ── современное оружие: учёба → порох → мушкет → учёба → автомат ──
+T.startLifeGame('m');
+{
+  const P = T.P;
+  const cf = T.objects.find(o => o.type === 'campfire');
+  P.x = cf.x + 0.5; P.y = cf.y + 0.5;
+  P.inv.wood = 30; P.inv.stone = 20; P.inv.ore = 40; P.inv.bronze = 0; P.weapon = 0; P.axe = false; P.knows.gun = false; P.knows.auto = false;
+  const chain = ['bronze', 'bronze', 'sword', 'bronze', 'know_gun', 'bullets', 'musket', 'bronze', 'know_auto', 'auto'];
+  for (const id of chain) {
+    try { T.craftItem(id); } catch (e) { bad++; console.log('FAIL крафт ' + id + ': ' + e.message); break; }
+    // учёба (busyT) — доматываем сим
+    let g = 0;
+    while (P.busyT > 0 && g++ < 200) T.updateSim(0.5);
+  }
+  if (P.weapon !== 5) { bad++; console.log('FAIL: автомат не собран, weapon=' + P.weapon); }
+  if (!P.knows.gun || !P.knows.auto) { bad++; console.log('FAIL: знания не усвоены'); }
+  if ((P.inv.bullets || 0) < 8) { bad++; console.log('FAIL: пули не скрафтились'); }
+  console.log('оружейная ветка: weapon=' + P.weapon + ' (' + ['Кулаки','Копьё','Лук','Бронзовый меч','Мушкет','Автомат'][P.weapon] + '), knows=', JSON.stringify(P.knows));
+  // эпоха с автоматом = Современность
+  const eraN = T.era();
+  if (eraN !== 7) { bad++; console.log('FAIL: эпоха ' + eraN + ' ≠ 7 (Современность)'); }
+  else console.log('эпоха: Современность ✔');
+}
+
+// ── стройка: игрок ставит все 4 здания ──
+{
+  const P = T.P;
+  P.inv.wood = 40; P.inv.stone = 20; P.placing = null;
+  const before = T.objects.length;
+  const free = T.objects.filter(o => false); // найдём свободные клетки сами
+  // ищем свободную траву рядом с игроком
+  const spots = [];
+  for (let y = 2; y < 70; y++) for (let x = 2; x < 116; x++) {
+    // walkTile 2..4 — используем самый частый: трава (2)
+    // проверим objAt пусто
+    if (!T.objAt.get(T.key(x, y)) && (x + y) % 2 === 0) spots.push({ x, y });
+  }
+  let placed = 0;
+  for (const kind of ['farm', 'shelter', 'hut', 'house']) {
+    for (const s of spots) {
+      const wx = s.x * T.TILE + 2, wy = s.y * T.TILE + 2;
+      P.placing = kind;
+      const beforeN = T.objects.length;
+      try { T.tryPlaceBuilding(wx, wy); } catch (e) { bad++; console.log('FAIL стройка ' + kind + ': ' + e.message); break; }
+      if (!P.placing) { placed++; break; } // поставилось
+    }
+  }
+  console.log('стройка: поставлено', placed, 'из 4', placed === 4 ? 'OK' : 'FAIL');
+  if (placed !== 4) bad++;
+}
 
 console.log(bad === 0 ? '=== ТЕСТ РЕЖИМА «ЖИЗНЬ» ПРОЙДЕН' : '=== ОШИБОК: ' + bad);

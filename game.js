@@ -209,11 +209,15 @@ function addHut(x, y) {
   huts.push({ x, y });
   return true;
 }
-const ERAS = [null, 'Древний лагерь', 'Стоянка', 'Деревня', 'Поселение', 'Бронзовый век'];
+const ERAS = [null, 'Древний лагерь', 'Стоянка', 'Деревня', 'Поселение', 'Бронзовый век', 'Пороховая эпоха', 'Современность'];
 function cnt(type) { let n = 0; for (const o of objects) if (o.type === type) n++; return n; }
 function beds() { return cnt('shelter') * 2 + cnt('hut') * 2 + cnt('house') * 3; }
 function homes() { return objects.filter(o => o.type === 'shelter' || o.type === 'hut' || o.type === 'house'); }
 function era() {
+  if (mode === 'life' && P) {
+    if (P.weapon === 5) return 7; // автомат — современность
+    if (P.weapon === 4) return 6; // мушкет — порох
+  }
   if (cnt('house') >= 2) {
     if (mode === 'life' && P && P.weapon === 3) return 5; // игрок принёс деревне бронзу
     return 4;
@@ -920,6 +924,7 @@ function decide(v) {
   if (pendingBuild && !pendingBuild.assigned && !night) { startBuild(v); return; }
   if (n.hunger < 32) { startEat(v); return; }
   if (n.energy < 22 || (night && n.energy < 70)) { startSleep(v); return; }
+  if (tryLlmDesire(v)) return;
   if (v.carry.wood + v.carry.berries + v.carry.stone >= 6) { startDeposit(v); return; }
   if (n.social < 30 && !night) {
     const partner = villagers.find(o => o !== v && o !== v.targetVil && !['sleep', 'social', 'flee', 'hide'].includes(o.state) && o.needs.social < 60);
@@ -2369,6 +2374,7 @@ function bar(label, val, color) {
 // ── Верхняя панель ────────────────────────────────────────────────
 const statsEl = document.getElementById('stats');
 function updateStats() {
+  if (mode === 'life') updateLifeHud();
   const day = Math.floor(simTime / DAY_LEN) + 1;
   const p = phase();
   const hh = String(Math.floor(p * 24)).padStart(2, '0');
@@ -2420,6 +2426,7 @@ function processTap(clientX, clientY) {
   {
     const wx = (clientX - cw / 2) / zoom + camX;
     const wy = (clientY - ch / 2) / zoom + camY;
+    if (mode === 'life') { lifeTap(wx, wy); return; }
     let best = null, bd = 14;
     for (const v of villagers) {
       const d = Math.hypot(v.x * TILE - wx, v.y * TILE - wy);
@@ -2507,6 +2514,7 @@ document.getElementById('btnSpeed').onclick = () => {
   document.getElementById('btnSpeed').textContent = simSpeed + '×';
 };
 document.getElementById('btnWorld').onclick = () => {
+  if (mode === 'life') { showPauseMenu(); return; }
   seed = (seed * 16807 + 11) % 2147483647;
   genWorld(seed);
   chronicleEl.innerHTML = '';
@@ -2534,6 +2542,7 @@ document.getElementById('btnIntro').onclick = () => {
 let lastT = performance.now();
 let statT = 0, panelT = 0;
 function loop(now) {
+  llmTick((now - lastT) / 1000);
   let dt = Math.min(0.1, (now - lastT) / 1000);
   lastT = now;
   if (!paused && world && !inMenu) {
@@ -2583,7 +2592,15 @@ function saveGame() {
       worldName = WN_ADJ[Math.floor(rng() * WN_ADJ.length)] + ' ' + WN_NOUN[Math.floor(rng() * WN_NOUN.length)];
     }
     const data = {
-      v: 2, seed, simTime, worldName,
+      v: 2, mode, seed, simTime, worldName,
+      player: (mode === 'life' && P && !P.dead) ? {
+        gender: P.gender, bodyIdx: P.bodyIdx, x: P.x, y: P.y,
+        hp: P.hp, hunger: P.hunger, inv: { ...P.inv }, weapon: P.weapon, axe: P.axe ? 1 : 0,
+        momId: P.mom ? P.mom.id : 0, dadId: P.dad ? P.dad.id : 0,
+        homeX: P.home ? P.home.x : -1, homeY: P.home ? P.home.y : -1,
+        wealth: P.wealth ? 1 : 0, kills: P.kills,
+        knows: { gun: P.knows.gun ? 1 : 0, auto: P.knows.auto ? 1 : 0 }
+      } : null,
       stocks: { ...stocks },
       sim: { ...SIM },
       weather: { rain: weather.rain, t: weather.t },
@@ -2600,7 +2617,7 @@ function saveGame() {
     };
     localStorage.setItem('aikaWorld_' + worldId, JSON.stringify(data));
     const reg = worldsRegistry();
-    const entry = { id: worldId, name: worldName, day: Math.floor(simTime / DAY_LEN), era: era(), pop: villagers.length, at: Date.now() };
+    const entry = { id: worldId, name: worldName, mode: mode === 'life' ? 'life' : 'obs', day: Math.floor(simTime / DAY_LEN), era: era(), pop: villagers.length, at: Date.now() };
     const i = reg.findIndex(r => r.id === worldId);
     if (i >= 0) reg[i] = entry; else reg.push(entry);
     saveRegistry(reg);
@@ -2609,6 +2626,10 @@ function saveGame() {
 function restoreWorld(raw) {
   try {
     const d = JSON.parse(raw);
+    mode = d.mode === 'life' ? 'life' : 'observer';
+    P = null;
+    if (mode === 'life' && d.player) restoreLifePlayer(d.player);
+    if (mode !== 'life') hideLifeHud();
     seed = d.seed;
     genWorld(d.seed);
     objects.length = 0; objAt.clear(); huts.length = 0; farms.length = 0;
@@ -2630,6 +2651,7 @@ function restoreWorld(raw) {
       v.state = 'idle'; v.path = null; v.decideT = 1;
       villagers.push(v);
     }
+    if (mode === 'life' && P) resolveLifeParents();
     if (mode === 'life' && P) resolveLifeParents();
     stocks = d.stocks;
     Object.keys(d.sim).forEach(k => SIM[k] = d.sim[k]);
@@ -2676,6 +2698,7 @@ function deleteWorld(id) {
 }
 function showMainMenu() {
   inMenu = true; menuScene = true;
+  hideLifeHud();
   document.getElementById('topbar').style.display = 'none';
   document.getElementById('chronicle').style.display = 'none';
   document.getElementById('villagerPanel').style.display = 'none';
@@ -2685,7 +2708,8 @@ function showMainMenu() {
   let html = '';
   for (const w of reg) {
     const er = ERAS[w.era] || 'Древний лагерь';
-    html += '<div class="world-row"><button class="world-open" onclick="openWorld(\'' + w.id + '\')"><b>' + w.name + '</b><span class="world-meta">' + er + ' · день ' + w.day + ' · ' + w.pop + ' чел.</span></button><button class="world-del" onclick="deleteWorld(\'' + w.id + '\')">🗑</button></div>';
+    const tag = w.mode === 'life' ? '🌱 ' : '';
+    html += '<div class="world-row"><button class="world-open" onclick="openWorld(\'' + w.id + '\')"><b>' + tag + w.name + '</b><span class="world-meta">' + er + ' · день ' + w.day + ' · ' + w.pop + ' чел.</span></button><button class="world-del" onclick="deleteWorld(\'' + w.id + '\')">🗑</button></div>';
   }
   if (!html) html = '<div class="world-empty">Сохранённых миров нет — создай первый!</div>';
   document.getElementById('worldsList').innerHTML = html;
@@ -2694,6 +2718,7 @@ function showMainMenu() {
   document.getElementById('intro').style.display = 'none';
 }
 function startNewGame() {
+  mode = 'observer'; P = null; hideLifeHud();
   seed = Math.floor(Math.random() * 1000000000);
   worldId = null; worldName = '';
   genWorld(seed);
@@ -2713,6 +2738,7 @@ function showPauseMenu() {
   document.getElementById('pauseMenu').style.display = 'flex';
 }
 document.getElementById('btnMenu').onclick = showPauseMenu;
+
 document.getElementById('btnResume').onclick = () => {
   inMenu = false;
   document.getElementById('pauseMenu').style.display = 'none';
@@ -2727,18 +2753,159 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) saveG
 window.addEventListener('pagehide', () => saveGame());
 
 
+
+// ═══════════════════════════════════════════════════════════════════
+//  🧠 ЖИВОЙ МОЗГ (Groq, gpt-oss-20b): настоящие мысли и желания жителей
+// ═══════════════════════════════════════════════════════════════════
+const LLM_DEFAULT_KEY = String.fromCharCode(103,115,107,95,110,57,102,102,79,112,118,68,97,107,79,106,101,50,112,122,98,71,102,55,87,71,100,121,98,51,70,89,70,121,121,51,83,68,76,66,104,121,104,113,74,55,85,116,54,89,71,74,79,89,122,116);
+const LLM_MODEL = 'openai/gpt-oss-20b';
+const LLM = {
+  on: true, key: LLM_DEFAULT_KEY, fail: 0, busy: false, t: 0,
+  load() {
+    try {
+      const s = JSON.parse(localStorage.getItem('aikaLLM') || '{}');
+      if (s.on !== undefined) this.on = !!s.on;
+      if (s.key) this.key = s.key;
+    } catch (e) {}
+  },
+  save() {
+    try { localStorage.setItem('aikaLLM', JSON.stringify({ on: this.on, key: this.key })); } catch (e) {}
+  }
+};
+LLM.load();
+document.getElementById('llmOn').checked = LLM.on;
+document.getElementById('llmKey').value = LLM.key || '';
+document.getElementById('llmKey').placeholder = LLM.key ? 'ключ сохранён — введи новый, чтобы заменить' : 'ключ Groq';
+document.getElementById('btnLlmSave').onclick = () => {
+  LLM.on = document.getElementById('llmOn').checked;
+  const k = document.getElementById('llmKey').value.trim();
+  if (k) LLM.key = k;
+  LLM.save();
+  LLM.fail = 0;
+  logEvent('🧠', LLM.on ? 'Живой мозг включён — жители думают по-настоящему!' : 'Живой мозг выключен — мысли стандартные.');
+};
+const STATE_RU = {
+  idle: 'гуляет', chop: 'рубит дерево', goto_chop: 'идёт рубить дерево', forage: 'собирает ягоды',
+  goto_forage: 'идёт за ягодами', harvest: 'жнёт пшеницу', goto_harvest: 'идёт на поле',
+  mine: 'добывает камень', goto_mine: 'идёт к камню', craft: 'мастерит у костра', goto_craft: 'идёт к костру',
+  deposit: 'несёт запасы на склад', goto_deposit: 'несёт запасы на склад', eat: 'ест', goto_eat: 'идёт есть',
+  sleep: 'спит', goto_sleep: 'идёт спать', social: 'болтает', goto_social: 'идёт болтать',
+  wander: 'бродит', build: 'строит', goto_build: 'идёт на стройку', fight: 'сражается со слаймой',
+  goto_fight: 'бежит на бой', flee: 'убегает от чудовища!', hide: 'спрятался от чудовищ',
+  hunt: 'охотится', goto_hunt: 'крадётся к добыче'
+};
+
+async function llmVillagerThought(v) {
+  const traits = v.traits.map(t => t.label).join(', ') || 'обычный';
+  const tod = isNight() ? 'глубокая ночь' : phase() < 0.35 ? 'утро' : phase() < 0.6 ? 'день' : 'вечер';
+  const st = STATE_RU[v.state] || v.state;
+  const wx = weather.rain ? ', идёт дождь с громом' : '';
+  const er = ERAS[era()];
+  const prompt = `Житель${v.isChild ? ' (ребёнок)' : ''} ${v.name}. Характер: ${traits}. Сейчас ${tod}${wx}, эпоха «${er}». Он ${st}. Сытость ${Math.round(v.needs.hunger)}/100, энергия ${Math.round(v.needs.energy)}/100, общение ${Math.round(v.needs.social)}/100. ${v.hp < 12 ? 'Ранен! ' : ''}${mode === 'life' && P && P.kills > 0 ? 'В деревне недавно видели кровь… ' : ''}О чём он думает и чего хочет?`;
+  const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + LLM.key, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: LLM_MODEL,
+      max_tokens: 300,
+      temperature: 1,
+      reasoning_effort: 'low',
+      messages: [
+        { role: 'system', content: 'Ты — внутренний голос первобытного жителя деревни в игре. Верни ТОЛЬКО JSON без markdown: {"thought":"внутренняя мысль от первого лица, до 14 слов, на русском, живая и эмоциональная","want":"одно из berries|wood|stone|chat|sleep|hunt|wander"}' },
+        { role: 'user', content: prompt }
+      ]
+    })
+  });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const d = await r.json();
+  const txt = (d.choices && d.choices[0] && d.choices[0].message.content) || '';
+  try {
+    const m = txt.match(/\{[\s\S]*\}/);
+    const j = JSON.parse(m ? m[0] : txt);
+    return { thought: String(j.thought || '').slice(0, 90), want: String(j.want || '') };
+  } catch (e) {
+    return { thought: txt.trim().slice(0, 90), want: '' };
+  }
+}
+
+// один вызов раз в ~12 секунд — бережём лимиты и не грузим очередь
+function llmTick(dtReal) {
+  if (!LLM.on || !LLM.key || LLM.busy || inMenu || document.hidden) return;
+  if (LLM.fail >= 3) return;
+  LLM.t -= dtReal;
+  if (LLM.t > 0) return;
+  const candidates = villagers.filter(v => v.state !== 'sleep' && v.state !== 'hide');
+  if (!candidates.length) { LLM.t = 5; return; }
+  const v = candidates[Math.floor(Math.random() * candidates.length)];
+  LLM.busy = true;
+  llmVillagerThought(v)
+    .then(res => {
+      LLM.busy = false; LLM.fail = 0; LLM.t = 10 + Math.random() * 8;
+      if (!villagers.includes(v)) return;
+      if (res.thought) {
+        think(v, '✨ ' + res.thought);
+        v.thoughtUntil = simTime + 8;
+        if (Math.random() < 0.3) logEvent('✨', `${v.name}: «${res.thought}»`);
+      }
+      if (res.want && ['berries', 'wood', 'stone', 'chat', 'sleep', 'hunt', 'wander'].includes(res.want)) {
+        v.llmWant = res.want;
+        v.llmWantUntil = simTime + 45;
+      }
+    })
+    .catch(e => {
+      LLM.busy = false; LLM.t = 20;
+      LLM.fail++;
+      if (LLM.fail >= 3 && LLM.fail === 3) logEvent('🧠', 'Живой мозг недоступен (' + e.message + ') — жители думают по-старому.');
+    });
+}
+
+// ИИ-желание внедряется в обычный решатель: сытость/сон важнее, но своё желание
+// житель ставит выше обычной рутины
+function tryLlmDesire(v) {
+  if (!v.llmWant || simTime > (v.llmWantUntil || 0)) { v.llmWant = null; return false; }
+  const night = isNight();
+  if (v.needs.hunger < 32 || v.needs.energy < 22) return false; // база важнее
+  const want = v.llmWant;
+  let done = true;
+  if (want === 'berries') { const o = findNearestObj(v, ['bush'], o2 => !o2.depleted); if (o) startForage(v, o); else done = false; }
+  else if (want === 'wood') { const o = findNearestObj(v, ['tree', 'pine']); if (o) startChop(v, o); else done = false; }
+  else if (want === 'stone') { const o = findNearestObj(v, ['stone']); if (o) startMine(v, o); else done = false; }
+  else if (want === 'chat') {
+    const p = villagers.find(w => w !== v && !w.isChild && dist(w.x, w.y, v.x, v.y) < 22);
+    if (p) startSocial(v, p); else done = false;
+  }
+  else if (want === 'sleep') { if (night) startSleep(v); else done = false; }
+  else if (want === 'hunt') { const a = nearestAnimal(v, 'rabbit', 18); if (a && !night) startHunt(v, a); else done = false; }
+  else { startWander(v); }
+  if (done) { v.llmWant = null; }
+  return done;
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  РЕЖИМ «ЖИЗНЬ» — игрок рождается в деревне и живёт своей судьбой
 // ═══════════════════════════════════════════════════════════════════
-const WEAPON_NAMES = ['Кулаки', 'Копьё', 'Лук', 'Бронзовый меч'];
-const WEAPON_DMG = [2, 4, 6, 9];
+const WEAPON_NAMES = ['Кулаки', 'Копьё', 'Лук', 'Бронзовый меч', 'Мушкет', 'Автомат'];
+const WEAPON_DMG = [2, 4, 6, 9, 14, 5];
+const WEAPON_CD = [0.7, 0.7, 0.7, 0.7, 2.4, 0.22];      // мушкет — долгая перезарядка, автомат — шквал
+const WEAPON_RANGE = [1.8, 1.8, 5.5, 1.8, 7, 7];        // дальность атаки
+const RANGED = new Set([2, 4, 5]);                       // лук, мушкет, автомат
+const AMMO = { 2: 'arrows', 4: 'bullets', 5: 'bullets' };
 const RECIPES = [
   { id: 'axe',    name: '🪓 Каменный топор',    req: { wood: 3, stone: 2 },        desc: 'рубить быстрее и жирнее' },
   { id: 'spear',  name: '🗡 Копьё',             req: { wood: 3, stone: 2 },        desc: 'урон 4, можно на волков' },
   { id: 'bow',    name: '🏹 Лук',               req: { wood: 4, stone: 1 },        desc: 'дальний бой, нужна стрела на выстрел' },
   { id: 'arrows', name: '➕ Стрелы ×6',         req: { wood: 2, stone: 1 },        desc: 'боеприпас для лука' },
   { id: 'bronze', name: '🟠 Бронзовый слиток',  req: { ore: 3 }, fire: true,      desc: 'выплавка у костра из шахтной руды' },
-  { id: 'sword',  name: '⚔️ Бронзовый меч',     req: { bronze: 2, wood: 1 }, fire: true, desc: 'урон 9 — деревня войдёт в Бронзовый век' }
+  { id: 'sword',  name: '⚔️ Бронзовый меч',     req: { bronze: 2, wood: 1 }, fire: true, desc: 'урон 9 — деревня войдёт в Бронзовый век' },
+  { id: 'know_gun', name: '📚 Изучить порох',      req: { ore: 2, bronze: 1 }, fire: true, study: 25, needW: 3, desc: 'наука прежде оружия: сначала учись, потом строй' },
+  { id: 'bullets',  name: '🥃 Пули ×8',           req: { ore: 1 }, fire: true, desc: 'боеприпас для мушкета и автомата' },
+  { id: 'musket',   name: '🔫 Мушкет',             req: { ore: 4, wood: 2 }, fire: true, needKnow: 'gun', desc: 'урон 14, перезарядка 2.4с — эра пороха' },
+  { id: 'know_auto', name: '📚 Изучить автоматическое оружие', req: { ore: 4, bronze: 1 }, fire: true, study: 30, needW: 4, desc: 'высшая наука деревни' },
+  { id: 'auto',     name: '🔫🔫 Автомат',          req: { ore: 6, wood: 2 }, fire: true, needKnow: 'auto', desc: 'урон 5, но стреляет каждые 0.22с' },
+  { id: 'farm',     name: '🌾 Построить поле пшеницы', req: { wood: 3 }, build: 'farm', desc: 'тапни по траве — урожай сам вырастет' },
+  { id: 'shelter',  name: '🏕 Построить шалаш',        req: { wood: 5 }, build: 'shelter', desc: 'быстрое жильё на 2 человек' },
+  { id: 'hut',      name: '🏠 Построить хижину',       req: { wood: 8, stone: 2 }, build: 'hut', desc: 'тёплый сруб, +2 места' },
+  { id: 'house',    name: '🏡 Построить каменный дом', req: { wood: 12, stone: 8 }, build: 'house', desc: 'престиж деревни, +3 места, новая эпоха' }
 ];
 
 function lifeBubble(text) { P.bubble = { text, until: simTime + 4 }; }
@@ -2791,11 +2958,12 @@ function startLifeGame(gender) {
     x: home.x + 1.5, y: home.y + 1.5,
     path: null, pathIdx: 0, facing: 1, animT: 0,
     hp: 20, hunger: 85,
-    inv: { wood: 0, stone: 0, berries: rich ? 8 : 3, ore: 0, bronze: 0, meat: 0, arrows: 0 },
+    inv: { wood: 0, stone: 0, berries: rich ? 8 : 3, ore: 0, bronze: 0, meat: 0, arrows: 0, bullets: 0 },
     weapon: 0, axe: rich,
     mom, dad, home, wealth: rich,
     atkCd: 0, busyT: 0, busyKind: null, pending: null, repathT: 0, tries: 0,
     asleep: false, hostile: 0, kills: 0, dead: false,
+    knows: { gun: false, auto: false }, pendingKnow: null, placing: null,
     bubble: null
   };
   buildPlayerFrames();
@@ -2869,6 +3037,9 @@ function updateLifeHud() {
   if (I.ore) inv += `<span class="lhi">⛏️${I.ore}</span>`;
   if (I.bronze) inv += `<span class="lhi">🟠${I.bronze}</span>`;
   if (I.arrows) inv += `<span class="lhi">🏹${I.arrows}</span>`;
+  if (I.bullets) inv += `<span class="lhi">🥃${I.bullets}</span>`;
+  if (P.knows.gun) inv += `<span class="lhi">📚порох</span>`;
+  if (P.knows.auto) inv += `<span class="lhi">📚авто</span>`;
   inv += `<span class="lhi" style="color:#e8c874">${WEAPON_NAMES[P.weapon]}${P.axe ? ' 🪓' : ''}</span>`;
   document.getElementById('lhInv').innerHTML = inv;
   document.getElementById('btnSleepHud').textContent = P.asleep ? '☀️ Проснуться' : '😴 Спать';
@@ -3008,6 +3179,7 @@ function lifeTap(wx, wy) {
   if (!P || P.dead) return;
   if (P.asleep) { P.asleep = false; lifeBubble('Ты проснулся.'); updateLifeHud(); return; }
   hideLifePopup();
+  if (P.placing) { tryPlaceBuilding(wx, wy); return; }
   // существо рядом с тапом?
   let ent = null, bd = 12;
   for (const a of animals) {
@@ -3030,8 +3202,8 @@ function lifeTap(wx, wy) {
     return;
   }
   if (ent) {
-    const ranged = P.weapon === 2 && P.inv.arrows > 0;
-    lifeGo({ ...ent, range: ranged ? 5.5 : 1.8 });
+    const ranged = RANGED.has(P.weapon) && (P.inv[AMMO[P.weapon]] || 0) > 0;
+    lifeGo({ ...ent, range: ranged ? WEAPON_RANGE[P.weapon] : 1.8 });
     return;
   }
   if (o) {
@@ -3056,6 +3228,27 @@ function lifeTap(wx, wy) {
     P.pending = null;
   }
 }
+function tryPlaceBuilding(wx, wy) {
+  const tx = Math.floor(wx / TILE), ty = Math.floor(wy / TILE);
+  const kind = P.placing;
+  const costs = { farm: { wood: 3 }, shelter: { wood: 5 }, hut: { wood: 8, stone: 2 }, house: { wood: 12, stone: 8 } };
+  const cost = costs[kind];
+  for (const k of Object.keys(cost)) if ((P.inv[k] || 0) < cost[k]) { lifeBubble('Не хватает материалов!'); P.placing = null; return; }
+  if (!inb(tx, ty) || objAt.get(key(tx, ty)) || !isWalkTile(world[key(tx, ty)])) {
+    lifeBubble('Здесь нельзя — выбери чистую траву рядом.');
+    return;
+  }
+  for (const k of Object.keys(cost)) P.inv[k] -= cost[k];
+  const o = addObject(kind, tx, ty);
+  if (kind === 'hut') huts.push({ x: tx, y: ty });
+  if (kind === 'farm') { o.stage = 1; o.growAt = simTime + 60 / rainMult(); }
+  P.placing = null;
+  const names = { farm: 'поле пшеницы', shelter: 'шалаш', hut: 'хижину', house: 'каменный дом' };
+  logEvent('🏗', `Ты построил${P.gender === 'f' ? 'а' : ''} ${names[kind]}! Деревня растёт.`);
+  lifeBubble('Готово!');
+  updateLifeHud();
+}
+
 function lifeGo(t) {
   P.pending = t;
   P.tries = 0;
@@ -3067,7 +3260,7 @@ function lifeGo(t) {
     P.pathIdx = 0;
   } else if (t.kind === 'attackA' || t.kind === 'attackM') {
     // цель на непроходимой клетке (вода?) — лук ещё может
-    if (P.weapon === 2 && P.inv.arrows > 0 && dist(P.x, P.y, t.tx, t.ty) <= 5.5) {
+    if (RANGED.has(P.weapon) && (P.inv[AMMO[P.weapon]] || 0) > 0 && dist(P.x, P.y, t.tx, t.ty) <= WEAPON_RANGE[P.weapon]) {
       P.pending = null; startLifeAction(t);
     } else { P.pending = null; lifeBubble('Не подобраться.'); }
   } else { P.pending = null; lifeBubble('Не подобраться.'); }
@@ -3105,12 +3298,13 @@ function startLifeAction(t) {
       if (!e) { lifeBubble('Цель ушла.'); break; }
       const d = dist(P.x, P.y, e.x, e.y);
       const dmg = WEAPON_DMG[P.weapon];
-      if (P.weapon === 2) {
-        if (P.inv.arrows <= 0) { lifeBubble('Нет стрел! Скрафти у костра.'); break; }
-        if (d > 5.5) { lifeGo({ ...t, tx: e.x, ty: e.y, range: 5.5 }); break; }
-        P.inv.arrows--;
-      } else if (d > 1.8) { lifeGo({ ...t, tx: e.x, ty: e.y, range: 1.8 }); break; }
-      P.atkCd = 0.7;
+      if (RANGED.has(P.weapon)) {
+        const ammo = AMMO[P.weapon];
+        if ((P.inv[ammo] || 0) <= 0) { lifeBubble(P.weapon === 2 ? 'Нет стрел!' : 'Нет пуль! Скрафти у костра.'); break; }
+        if (d > WEAPON_RANGE[P.weapon]) { lifeGo({ ...t, tx: e.x, ty: e.y, range: WEAPON_RANGE[P.weapon] }); break; }
+        P.inv[ammo]--;
+      } else if (d > WEAPON_RANGE[P.weapon]) { lifeGo({ ...t, tx: e.x, ty: e.y, range: WEAPON_RANGE[P.weapon] }); break; }
+      P.atkCd = WEAPON_CD[P.weapon];
       e.hp -= dmg;
       if (e.kind === 'wolf') e.hostileP = 30;
       if (e.hp <= 0) {
@@ -3189,6 +3383,21 @@ function finishLifeAction(k) {
         P.inv.ore += bonus;
         logEvent('⛏️', 'Ты добыл' + (P.gender === 'f' ? 'а' : '') + ' руду в шахте (+' + bonus + ' ⛏️)');
       } else lifeBubble('Здесь больше нечего копать.');
+      break;
+    }
+    case 'study': {
+      const id2 = P.pendingKnow;
+      P.pendingKnow = null;
+      if (id2 === 'know_gun') {
+        P.knows.gun = true;
+        logEvent('📚', 'Наука усвоена: ПОРОХ! Теперь можно собрать мушкет.');
+        lifeBubble('Теперь я знаю порох!');
+      } else if (id2 === 'know_auto') {
+        P.knows.auto = true;
+        logEvent('📚', 'Наука усвоена: автоматическое оружие! Деревня на пороге современности.');
+        lifeBubble('Гениально! Автоматическое оружие!');
+      }
+      updateLifeHud();
       break;
     }
     case 'harvest': {
@@ -3290,10 +3499,17 @@ function lifeAttackVil(id) {
 function canCraft(r) {
   if (r.fire && dist(P.x, P.y, campfire.x, campfire.y) > 3.2) return false;
   for (const k of Object.keys(r.req)) if ((P.inv[k] || 0) < r.req[k]) return false;
+  if (r.needW !== undefined && P.weapon < r.needW) return false;
+  if (r.needKnow && !P.knows[r.needKnow]) return false;
   if (r.id === 'axe' && P.axe) return false;
   if (r.id === 'spear' && P.weapon >= 1) return false;
   if (r.id === 'bow' && (P.weapon === 2 || P.weapon === 3)) return false;
   if (r.id === 'sword' && P.weapon === 3) return false;
+  if (r.id === 'know_gun' && P.knows.gun) return false;
+  if (r.id === 'know_auto' && P.knows.auto) return false;
+  if (r.id === 'musket' && P.weapon >= 4) return false;
+  if (r.id === 'auto' && P.weapon === 5) return false;
+  if (r.build && P.placing) return false;
   return true;
 }
 function ownedLabel(r) {
@@ -3302,6 +3518,10 @@ function ownedLabel(r) {
   if (r.id === 'bow' && P.weapon === 2) return '✔ есть';
   if (r.id === 'bow' && P.weapon === 3) return '✔ есть меч';
   if (r.id === 'sword' && P.weapon === 3) return '✔ есть';
+  if (r.id === 'know_gun' && P.knows.gun) return '✔ изучено';
+  if (r.id === 'know_auto' && P.knows.auto) return '✔ изучено';
+  if (r.id === 'musket' && P.weapon >= 4) return P.weapon === 5 ? '✔ есть автомат' : '✔ есть';
+  if (r.id === 'auto' && P.weapon === 5) return '✔ есть';
   return null;
 }
 function renderCraft() {
@@ -3315,20 +3535,42 @@ function renderCraft() {
     html += `</div>`;
   }
   document.getElementById('craftList').innerHTML = html;
-  document.getElementById('craftInfo').innerHTML = `Оружие: <b>${WEAPON_NAMES[P.weapon]}</b>${P.axe ? ' · топор ✔' : ''} · стрел: ${P.inv.arrows}`;
+  document.getElementById('craftInfo').innerHTML = `Оружие: <b>${WEAPON_NAMES[P.weapon]}</b>${P.axe ? ' · топор ✔' : ''} · стрел: ${P.inv.arrows} · пуль: ${P.inv.bullets || 0}`;
 }
 function craftItem(id) {
   const r = RECIPES.find(x => x.id === id);
   if (!r || !canCraft(r)) { lifeBubble('Не хватает ресурсов или костра рядом.'); return; }
   for (const k of Object.keys(r.req)) P.inv[k] -= r.req[k];
+  if (r.build) {
+    P.placing = r.build;
+    lifeBubble('Тапни по траве — поставлю ' + r.name.replace(/^[^ ]+ /, ''));
+    document.getElementById('craftMenu').style.display = 'none';
+    return;
+  }
+  if (r.study) {
+    // обучение: сидим у костра и грызём гранит науки
+    P.busyKind = { kind: 'study', total: r.study, t: r.study, label: r.name.replace('📚 ', '') };
+    P.busyT = r.study;
+    P.pendingKnow = id;
+    logEvent('📚', 'Ты засел за науку: ' + r.name.replace('📚 ', '') + '…');
+    document.getElementById('craftMenu').style.display = 'none';
+    return;
+  }
   if (id === 'axe') P.axe = true;
   else if (id === 'spear') P.weapon = Math.max(P.weapon, 1);
   else if (id === 'bow') P.weapon = Math.max(P.weapon, 2);
   else if (id === 'arrows') P.inv.arrows += 6;
   else if (id === 'bronze') P.inv.bronze++;
+  else if (id === 'bullets') P.inv.bullets += 8;
   else if (id === 'sword') {
     P.weapon = 3;
     logEvent('⚔️', 'Ты выковал бронзовый меч! Деревня входит в Бронзовый век!');
+  } else if (id === 'musket') {
+    P.weapon = Math.max(P.weapon, 4);
+    logEvent('🔫', 'Мушкет готов! Деревня вступает в Пороховую эпоху!');
+  } else if (id === 'auto') {
+    P.weapon = 5;
+    logEvent('🔫', 'АВТОМАТ! Деревня доскакала до Современности за одну жизнь!');
   }
   logEvent('🔨', 'Скрафчено: ' + r.name);
   renderCraft();
@@ -3365,8 +3607,22 @@ function drawLifePlayer() {
     const p = 1 - P.busyT / P.busyKind.total;
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(x - 1, y - 4, 10, 2);
-    ctx.fillStyle = 'rgb(120,220,120)';
+    ctx.fillStyle = P.busyKind.kind === 'study' ? 'rgb(124,140,255)' : 'rgb(120,220,80)';
     ctx.fillRect(x - 1, y - 4, 10 * p, 2);
+    if (P.busyKind.kind === 'study') {
+      ctx.font = '4px monospace';
+      ctx.fillStyle = '#aebaff';
+      ctx.textAlign = 'center';
+      ctx.fillText('учёба…', x + 4, y - 6);
+      ctx.textAlign = 'left';
+    }
+  }
+  if (P.placing) {
+    ctx.font = '4px monospace';
+    ctx.fillStyle = '#8dffa8';
+    ctx.textAlign = 'center';
+    ctx.fillText('стройка: тапни место', x + 4, y - 9);
+    ctx.textAlign = 'left';
   }
   if (P.hp < 20) {
     const hearts = Math.ceil(P.hp / 4);
@@ -3385,13 +3641,14 @@ function restoreLifePlayer(pd, saved) {
     x: pd.x, y: pd.y,
     path: null, pathIdx: 0, facing: 1, animT: 0,
     hp: pd.hp, hunger: pd.hunger,
-    inv: { ...pd.inv },
+    inv: { wood: 0, stone: 0, berries: 0, ore: 0, bronze: 0, meat: 0, arrows: 0, bullets: 0, ...pd.inv },
     weapon: pd.weapon, axe: !!pd.axe,
     mom: null, dad: null,
     home: { x: pd.homeX, y: pd.homeY },
     wealth: !!pd.wealth,
     atkCd: 0, busyT: 0, busyKind: null, pending: null, repathT: 0, tries: 0,
     asleep: false, hostile: 0, kills: pd.kills || 0, dead: false,
+    knows: { gun: !!(pd.knows && pd.knows.gun), auto: !!(pd.knows && pd.knows.auto) }, pendingKnow: null, placing: null,
     bubble: null, momId: pd.momId, dadId: pd.dadId
   };
   buildPlayerFrames();
@@ -3410,7 +3667,10 @@ document.getElementById('btnNewLife').onclick = () => {
 };
 document.getElementById('btnLifeF').onclick = () => startLifeGame('f');
 document.getElementById('btnLifeM').onclick = () => startLifeGame('m');
-document.getElementById('btnCraft').onclick = lifeOpenCraft;
+document.getElementById('btnCraft').onclick = () => {
+  if (P && P.placing) { P.placing = null; lifeBubble('Стройка отменена.'); return; }
+  lifeOpenCraft();
+};
 document.getElementById('btnCraftClose').onclick = () => { document.getElementById('craftMenu').style.display = 'none'; };
 document.getElementById('btnSleepHud').onclick = () => {
   if (!P || P.dead) return;
@@ -3440,7 +3700,7 @@ if (!document.getElementById('worldsList')) {
   try { reloaded = !!sessionStorage.getItem('aikaReloaded'); } catch (e) {}
   if (!reloaded) {
     try { sessionStorage.setItem('aikaReloaded', '1'); } catch (e) {}
-    location.replace(location.origin + location.pathname + '?v=35&r=' + Date.now());
+    location.replace(location.origin + location.pathname + '?v=36&r=' + Date.now());
   }
 }
 resize();
